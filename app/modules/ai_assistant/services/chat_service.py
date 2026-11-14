@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..container import AiAssistantContainer
-from ..domain import AnswerOutcome, EvidenceItem, InteractionContext, PersonalContext, RetrievedChunk, make_excerpt
+from ..domain import AnswerOutcome, EvidenceItem, InteractionContext, PersonalContext, RetrievedChunk, make_query_excerpt
 from ..enums import AnswerStatus, CitationType, ContextMode, MessageRole, WarningLevel, warning_from_db
 from ..errors import AppError, dependency_unavailable, not_found
 from ..integration import Principal
@@ -60,14 +60,15 @@ def _history_text(history: list[ChatMessage]) -> str:
     )
 
 
-def chunk_evidence(chunks: list[RetrievedChunk], start: int) -> list[EvidenceItem]:
+def chunk_evidence(chunks: list[RetrievedChunk], start: int, query: str | None = None) -> list[EvidenceItem]:
     out = []
     for i, c in enumerate(chunks, start=start):
         body = strip_context_header(c.content)
         out.append(
             EvidenceItem(
-                i, CitationType.MEDICAL_DOCUMENT, f"{c.source_name} — {c.title}", c.content, make_excerpt(body),
+                i, CitationType.MEDICAL_DOCUMENT, f"{c.source_name} — {c.title}", c.content, make_query_excerpt(body, query),
                 source_url=c.source_url, document_id=c.document_id, chunk_id=c.chunk_id,
+                severity_hint=(c.metadata or {}).get("severity"),
             )
         )
     return out
@@ -172,14 +173,15 @@ class ChatService:
         # ---- Ngữ cảnh cá nhân (M1) + Rule Engine (M2) + Truy xuất tri thức
         personal = await c.personal_context.build(principal, mode, content)
         interaction = await c.interactions.build_for_chat(principal, content, personal, mode)
+        rquery = retrieval_query(content, history)
         try:
-            retrieval = await c.retriever.retrieve(self.db, retrieval_query(content, history))
+            retrieval = await c.retriever.retrieve(self.db, rquery)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Knowledge retrieval failed")
             raise dependency_unavailable("Kho tri thức tạm thời không khả dụng") from exc
 
         interaction_items = interaction.evidence if interaction else []
-        docs = chunk_evidence(retrieval.chunks, start=len(interaction_items) + 1)
+        docs = chunk_evidence(retrieval.chunks, start=len(interaction_items) + 1, query=rquery)
         evidence = interaction_items + docs
 
         # ---- Cổng đủ bằng chứng: không có tài liệu và không có kết quả Rule Engine → KHÔNG gọi LLM

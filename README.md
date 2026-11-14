@@ -1,7 +1,7 @@
 # VitaP · Module 3 — AI Personal Health Assistant & RAG
 
 Triển khai backend cho **7 endpoint** `/api/v1/ai/*` theo `M3_AI_Personal_Health_Assistant_Technical_Design.md` (v2.0), `VitaP_API_Docs.md` §9 và `database_schema_v3.md`.
-FastAPI + SQLAlchemy 2 (async) + PostgreSQL/pgvector + LangChain (LCEL). **139 test, 0 lỗi** (51 test cần PostgreSQL thật).
+FastAPI + SQLAlchemy 2 (async) + PostgreSQL/pgvector + LangChain (LCEL). **161 test, 0 lỗi** (55 test cần PostgreSQL thật).
 
 ## 1. Cấu trúc (khớp thiết kế §10.1)
 
@@ -23,7 +23,7 @@ app/modules/ai_assistant/
 │   ├── retrieval.py           # Hybrid → Rerank (3s) → ngưỡng; fallback RRF / chỉ từ khóa
 │   ├── embeddings/ollama_nomic.py · reranking/bge_client.py
 │   ├── generation/lcel_chain.py   # Gemini → MedGemma, một chiều
-│   └── ingestion/chunker.py · cli.py
+│   └── ingestion/adapters.py · chunker.py · cli.py
 ├── prompts/system_v2.md · explain_ddi_v1.md
 migrations/m3_schema_delta.sql (+ versions/…py cho Alembic)
 tests/ · examples/wiring.py · data/sample/corpus_sample.jsonl
@@ -48,12 +48,33 @@ POST /chat/sessions/{id}/messages
 ```bash
 pip install -r requirements.txt
 psql -f migrations/m3_schema_delta.sql            # hoặc Alembic: đặt down_revision trong migrations/versions/*.py
-python -m app.modules.ai_assistant.rag.ingestion.cli --input data/sample/corpus_sample.jsonl --skip-existing   # thêm --dry-run để thử
-pytest                                             # 88 test không cần DB
-M3_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost/vitap_test pytest   # đủ 139 (cần PostgreSQL + pgvector ≥0.5, DB test sẽ bị DROP SCHEMA)
+python -m app.modules.ai_assistant.rag.ingestion.cli \
+    --input nutrition_diet_guidelines.json drug_food_interaction.json corpus.jsonl \
+    --skip-existing --min-chunk-tokens 80            # thêm --dry-run để thử, --no-semantic để bỏ SemanticChunker
+pytest                                             # 106 test không cần DB
+M3_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost/vitap_test pytest   # đủ 161 (cần PostgreSQL + pgvector ≥0.5, DB test sẽ bị DROP SCHEMA)
 ```
 
 Nối vào app: xem `examples/wiring.py`. Cấu hình qua biến môi trường (`.env.example`).
+
+## 3b. Dữ liệu nguồn JSON của nhóm → kho tri thức
+
+CLI nhận nhiều file `.json` (mảng hoặc một object) và `.jsonl`; **tự nhận diện định dạng theo từng bản ghi** (`--format` để ép). Chunker lõi không đổi; việc chuyển định dạng nằm ở `rag/ingestion/adapters.py`.
+
+| File | Nhận diện | Cách chuyển | Kết quả chunk |
+|---|---|---|---|
+| `nutrition_diet_guidelines.json` (MedlinePlus) | có `topic_id` + `summary` | dòng đầu đoạn kết thúc bằng `?` → `## …`; bullet liền nhau gom thành danh sách; dòng cuối `NIH: …` tách vào `license_info`; `also_called`→aliases; `category`+`groups`→categories; `url`→`source_url` | 1 chunk/mục câu hỏi (vd. bài *Alcohol* → 7 chunk, 6 nếu `--min-chunk-tokens 80`) |
+| `drug_food_interaction.json` | có `inn_name` + `fda_evidence` | 1 dòng = 1 tài liệu = **1 chunk** (`chunk_strategy="single"`), nội dung song ngữ: khuyến nghị tiếng Việt + trích nhãn FDA; `severity`, `food_category`, `fda_section`, `ingredient_id` gốc lưu trong `metadata` | `external_id = dfi-<id>`, `document_type = DRUG_FOOD_INTERACTION` |
+| `*.jsonl` Golden Format | có `external_id` + `content` | không đổi | như cũ |
+
+Thay đổi đi kèm: (1) `HybridChunker(min_chunk_tokens=…)` gộp các mục quá ngắn (mặc định tắt); (2) chunk mang `metadata`, và **chunk `severity = RED` được trích dẫn sẽ nâng `warning_level` tối thiểu lên WARNING** dù LLM chọn INFO; (3) trích đoạn `excerpt` của citation nay bắt đầu từ câu khớp câu hỏi nhất thay vì 300 ký tự đầu chunk (tránh trường hợp đoạn hiển thị không chứa câu chứng minh).
+
+**Vấn đề chất lượng dữ liệu cần nhóm xử lý trước khi nạp thật**
+- **`drug_food_interaction.json` id 1 bị lệch thuốc**: ingredient là *Dextromethorphan* nhưng `fda_evidence` nói về *acetaminophen* (tổn thương gan khi uống ≥3 ly rượu mỗi ngày). Nhiều khả năng là nhãn thuốc phối hợp bị gán cho một hoạt chất. Chatbot sẽ trích dẫn rằng dextromethorphan gây hại gan, điều này có thể sai. Nên rà soát toàn bộ các dòng có `fda_evidence` nhắc tên hoạt chất khác. Lời khuyên `clinical_advice_vn` cũng có vẻ sinh theo mẫu (cùng một câu "gan, hạ đường huyết hoặc ức chế TKTW" cho mọi dòng RED/ALCOHOL), không bám sát bằng chứng.
+- **`ingredient_id` là số nguyên (375)**, còn `ingredients.id` trong schema v3 là UUID: không join được. Hiện chỉ lưu vào `metadata.source_ingredient_id`. Nếu M2 muốn dùng dữ liệu này tất định, cần ánh xạ qua `inn_name` ↔ `ingredients.normalized_name`.
+- **Không có `source_url`/mã nhãn** trong file thuốc–thực phẩm ⇒ citation không có link; `source_name` đang giả định `"FDA drug labeling"` (hằng `DRUG_FOOD_SOURCE`). Nên bổ sung URL DailyMed/openFDA của nhãn.
+- Chỉ thấy `severity` RED/GREEN trong mẫu; giá trị khác được giữ nguyên chữ và **không** kích hoạt nâng cảnh báo.
+- Schema v3 chưa có bảng thuốc–thực phẩm. Dùng qua RAG thì chạy được ngay; nếu muốn cảnh báo tất định kiểu "thuốc đang dùng + rượu" thì nên có bảng riêng do M2 truy vấn. Không có dòng nào cho một thuốc không có nghĩa là an toàn; Output Guard vẫn chặn các câu khẳng định đó.
 
 ## 4. Hợp đồng cần các thành viên khác đáp ứng
 

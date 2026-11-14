@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Literal, Sequence
 
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from pydantic import BaseModel, Field
@@ -36,6 +36,9 @@ class CorpusRecord(BaseModel):
     content: str
     version: str | None = None
     license_info: str | None = None
+    # "single": bản ghi ngắn dạng sự kiện (vd. 1 dòng thuốc–thực phẩm) → đúng 1 chunk, không tách theo header.
+    chunk_strategy: Literal["sections", "single"] = "sections"
+    extra: dict[str, Any] = Field(default_factory=dict)  # ghi vào metadata của chunk (vd. severity)
 
 
 @dataclass
@@ -63,9 +66,11 @@ class HybridChunker:
         token_counter: Callable[[str], int] = estimate_tokens,
         semantic_trigger: int = SEMANTIC_TRIGGER_TOKENS,
         hard_cap: int = HARD_CAP_TOKENS,
+        min_chunk_tokens: int = 0,
     ) -> None:
         """semantic_embeddings: đối tượng có `embed_documents(list[str])` (vd. NomicOllamaEmbeddingAdapter). None → bỏ tầng ngữ nghĩa."""
         self.count, self.trigger, self.cap = token_counter, semantic_trigger, hard_cap
+        self.min_tokens = min_chunk_tokens  # >0: gộp các mục quá ngắn liền kề (tổng vẫn ≤ hard cap)
         self._md = MarkdownHeaderTextSplitter(
             headers_to_split_on=[("#", "h1"), ("##", "h2"), ("###", "h3")], strip_headers=False
         )
@@ -96,26 +101,38 @@ class HybridChunker:
                     out.extend((p.strip(), path) for p in self._recursive.split_text(piece) if p.strip())
                 else:
                     out.append((piece, path))
-        return out
+        return self._merge_small(out)
+
+    def _merge_small(self, parts: list[tuple[str, list[str]]]) -> list[tuple[str, list[str]]]:
+        if self.min_tokens <= 0 or len(parts) < 2:
+            return parts
+        merged = [parts[0]]
+        for text, path in parts[1:]:
+            cur, cur_path = merged[-1]
+            small = self.count(cur) < self.min_tokens or self.count(text) < self.min_tokens
+            if small and self.count(cur) + self.count(text) <= self.cap:
+                merged[-1] = (f"{cur}\n\n{text}", cur_path)
+            else:
+                merged.append((text, path))
+        return merged
 
     def chunk_document(self, rec: CorpusRecord) -> list[Chunk]:
         header = context_header(rec)
+        body_text = rec.content.strip()
+        if rec.chunk_strategy == "single" and body_text and self.count(body_text) <= self.cap:
+            parts = [(body_text, [])]
+        else:
+            parts = self.split_body(rec.content)
         chunks: list[Chunk] = []
-        for i, (body, path) in enumerate(self.split_body(rec.content)):
-            chunks.append(
-                Chunk(
-                    index=i,
-                    body=body,
-                    content=f"{header}{HEADER_SEP}{body}",
-                    metadata={
-                        "external_id": rec.external_id,
-                        "source_name": rec.source_name,
-                        "language": rec.language,
-                        "heading_path": path,
-                        "aliases": rec.aliases,
-                        "categories": rec.categories,
-                        "token_estimate": self.count(body),
-                    },
-                )
-            )
+        for i, (body, path) in enumerate(parts):
+            base = {
+                "external_id": rec.external_id,
+                "source_name": rec.source_name,
+                "language": rec.language,
+                "heading_path": path,
+                "aliases": rec.aliases,
+                "categories": rec.categories,
+                "token_estimate": self.count(body),
+            }
+            chunks.append(Chunk(index=i, body=body, content=f"{header}{HEADER_SEP}{body}", metadata={**rec.extra, **base}))
         return chunks

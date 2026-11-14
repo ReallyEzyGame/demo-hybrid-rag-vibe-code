@@ -1,0 +1,24 @@
+[
+  {
+    "ingredient_id": 375,
+    "inn_name": "Dextromethorphan",
+    "display_name_vn": "Dextromethorphan",
+    "food_category": "ALCOHOL",
+    "severity": "RED",
+    "fda_section": "warnings",
+    "fda_evidence": "Severe liver damage may occur if you take: more than 4,000 mg of acetaminophen in 24 hours with other drugs containing acetaminophen 3 or more alcoholic drinks every day while using this product Allergy alert: Acetaminophen may cause severe skin reactions.",
+    "clinical_advice_vn": "[NGUY HIỂM / CHỐNG CHỈ ĐỊNH] Tránh hoặc hạn chế tối đa rượu bia trong thời gian điều trị do nguy cơ tổn thương gan, hạ đường huyết hoặc ức chế thần kinh trung ương.",
+    "id": 1
+  },
+  {
+    "ingredient_id": 372,
+    "inn_name": "Cefpodoxime",
+    "display_name_vn": "Cefpodoxim",
+    "food_category": "FOOD_TIMING",
+    "severity": "GREEN",
+    "fda_section": "dosage_and_administration",
+    "fda_evidence": "DOSAGE AND ADMINISTRATION (See INDICATIONS AND USAGE for indicated pathogens.) Film-coated Tablets Cefpodoxime Proxetil Tablets, USP should be administered orally with food to enhance absorption.",
+    "clinical_advice_vn": "Tuân thủ hướng dẫn thời điểm uống thuốc (cùng bữa ăn hoặc khi bụng đói) để đảm bảo sinh khả dụng tốt nhất.",
+    "id": 2
+  }
+]

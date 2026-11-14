@@ -169,6 +169,12 @@ class OutputGuard:
             else:
                 level = max(level, WarningLevel.WARNING, key=_rank)
 
+        # Bằng chứng mức RED (nguy hiểm/cần tránh) được trích dẫn ⇒ tối thiểu WARNING, bất kể LLM chọn gì
+        if any((by_id[i].severity_hint or "").upper() == "RED" for i in used_ids):
+            if _rank(level) < 1:
+                violations.append("RED_EVIDENCE_ESCALATED")
+            level = max(level, WarningLevel.WARNING, key=_rank)
+
         followups = [f.strip() for f in answer.suggested_followups if f and f.strip()][:3]
         return GuardedAnswer(content, status, level, [by_id[i] for i in used_ids], followups, violations)
 

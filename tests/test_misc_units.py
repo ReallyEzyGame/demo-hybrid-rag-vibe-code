@@ -70,3 +70,17 @@ def test_strip_header_and_followup_query_rewrite():
     prev = ChatMessage(role="USER", content="Metformin dùng thế nào?")
     assert retrieval_query("còn tác dụng phụ?", [prev]) == "Metformin dùng thế nào? còn tác dụng phụ?"
     assert retrieval_query("Metformin có tác dụng phụ gì đối với người lớn tuổi khi dùng lâu dài?", [prev]).startswith("Metformin có")
+
+
+def test_query_excerpt_starts_at_most_relevant_sentence_and_keeps_section_title():
+    from app.modules.ai_assistant.domain import make_excerpt, make_query_excerpt
+
+    body = ("## What is moderate drinking?\n- For most women, no more than 1 standard drink a day\n\n"
+            "## What is a standard drink?\nIn the United States, a standard drink contains about 14 grams of pure alcohol.\n"
+            "- 12 ounces of regular beer")
+    ex = make_query_excerpt(body, "How many grams of pure alcohol are in a drink?")
+    assert ex.startswith("## What is a standard drink?") and "14 grams" in ex
+    assert make_query_excerpt(body, "zzz qqq") == make_excerpt(body)  # không khớp gì → quay về đầu đoạn
+    assert make_query_excerpt(body, None) == make_excerpt(body)
+    long = "intro. " * 200 + "The key fact about warfarin bleeding risk. " + "tail. " * 200
+    assert "warfarin bleeding" in make_query_excerpt(long, "warfarin bleeding") and len(make_query_excerpt(long, "warfarin bleeding")) <= 300

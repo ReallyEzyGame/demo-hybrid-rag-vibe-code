@@ -73,8 +73,9 @@ class ExplainService:
 
         docs: list[EvidenceItem] = []
         try:  # RAG bổ trợ: lỗi không làm hỏng endpoint
-            res = await c.retriever.retrieve(self.db, f"{a_label} {b_label} drug interaction")
-            docs = chunk_evidence(res.chunks[:2], start=len(ctx.evidence) + 1)
+            rq = f"{a_label} {b_label} drug interaction"
+            res = await c.retriever.retrieve(self.db, rq)
+            docs = chunk_evidence(res.chunks[:2], start=len(ctx.evidence) + 1, query=rq)
         except Exception:  # noqa: BLE001
             logger.warning("Explain: RAG retrieval skipped")
         evidence = ctx.evidence + docs

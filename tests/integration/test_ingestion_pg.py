@@ -93,7 +93,7 @@ async def test_dry_run_writes_nothing_and_invalid_lines_are_reported(engine, tmp
     f.write_text("\n".join([json.dumps(good), "{not json", json.dumps({"title": "no id"}), ""]), encoding="utf-8")
     rep = IngestReport()
     recs = list(read_jsonl(f, rep))
-    assert len(recs) == 1 and len(rep.invalid) == 2 and rep.invalid[0].startswith("dòng 2")
+    assert len(recs) == 1 and len(rep.invalid) == 2 and "dòng 2" in rep.invalid[0] and "c.jsonl" in rep.invalid[0]
     await ingest_records(iter(recs), engine, HashingEmbeddings(), HybridChunker(None), dry_run=True, report=rep)
     assert rep.documents == 1 and rep.chunks >= 1 and await count(engine, "knowledge_documents") == 0
 

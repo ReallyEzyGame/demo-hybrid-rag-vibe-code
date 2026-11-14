@@ -114,3 +114,16 @@ def test_llm_emergency_gets_critical_and_115():
 def test_followups_capped_at_three():
     g = guard.validate(ans("Ok [1].", cited=[1], follow=["a", "b", "c", "d", " "]), [ev(1)])
     assert g.followups == ["a", "b", "c"]
+
+
+def test_cited_red_evidence_escalates_warning_even_if_llm_says_info():
+    red = ev(1)
+    red.severity_hint = "RED"
+    g = guard.validate(ans("Tránh rượu bia khi dùng thuốc này [1].", level=WarningLevel.INFO, cited=[1]), [red])
+    assert g.warning_level is WarningLevel.WARNING and "RED_EVIDENCE_ESCALATED" in g.violations
+
+
+def test_uncited_red_evidence_and_green_do_not_escalate():
+    red, green = ev(1), ev(2)
+    red.severity_hint, green.severity_hint = "RED", "GREEN"
+    assert guard.validate(ans("Chỉ dùng nguồn xanh [2].", cited=[2]), [red, green]).warning_level is WarningLevel.INFO

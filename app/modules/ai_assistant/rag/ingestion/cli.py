@@ -1,7 +1,8 @@
 """CLI nạp dữ liệu .jsonl đã làm sạch vào PostgreSQL pgvector (thiết kế §3.4).
 
-    python -m app.modules.ai_assistant.rag.ingestion.cli --input ./data/cleaned/corpus_medlineplus.jsonl \
-        --batch-size 64 --skip-existing
+    python -m app.modules.ai_assistant.rag.ingestion.cli \
+        --input nutrition_diet_guidelines.json drug_food_interaction.json corpus.jsonl \
+        --batch-size 64 --skip-existing --min-chunk-tokens 80
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from ...config import AiAssistantSettings, get_settings
 from ..embeddings.ollama_nomic import EmbeddingsPort, NomicOllamaEmbeddingAdapter
 from ...repositories.knowledge_repo import to_pgvector_literal
+from .adapters import FORMATS, read_records
 from .chunker import Chunk, CorpusRecord, HybridChunker
 
 logger = logging.getLogger("m3.ingestion")
@@ -43,19 +45,8 @@ class IngestReport:
 
 
 def read_jsonl(path: Path, report: IngestReport, limit: int | None = None) -> Iterator[CorpusRecord]:
-    n = 0
-    with path.open(encoding="utf-8") as fh:
-        for lineno, line in enumerate(fh, start=1):
-            if not line.strip():
-                continue
-            try:
-                yield CorpusRecord.model_validate_json(line)
-            except ValidationError as exc:
-                report.invalid.append(f"dòng {lineno}: {exc.errors()[0]['msg']}")
-                continue
-            n += 1
-            if limit and n >= limit:
-                return
+    """Tương thích cũ: đọc .jsonl/.json và tự nhận diện định dạng."""
+    return read_records(path, report, limit)
 
 
 async def _document_exists(conn, rec: CorpusRecord) -> bool:  # noqa: ANN001
@@ -168,7 +159,9 @@ async def ingest_records(
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Nạp corpus .jsonl vào knowledge_documents / knowledge_chunks (pgvector)")
-    p.add_argument("--input", required=True, type=Path, help="File .jsonl theo Golden Format")
+    p.add_argument("--input", required=True, nargs="+", type=Path, help="Một hoặc nhiều file .jsonl/.json")
+    p.add_argument("--format", choices=FORMATS, default="auto", help="Định dạng bản ghi (mặc định tự nhận diện theo từng bản ghi)")
+    p.add_argument("--min-chunk-tokens", type=int, default=0, help="Gộp các mục ngắn hơn ngưỡng này (khuyến nghị 80 cho MedlinePlus)")
     p.add_argument("--batch-size", type=int, default=64, help="Số chunk embed mỗi lần gọi Ollama")
     p.add_argument("--skip-existing", action="store_true", help="Bỏ qua tài liệu đã có (source_name + external_id)")
     p.add_argument("--dry-run", action="store_true", help="Chỉ chunk và thống kê, không embed, không ghi DB")
@@ -184,16 +177,16 @@ async def _amain(args: argparse.Namespace, settings: AiAssistantSettings) -> int
         print("Thiếu --database-url hoặc biến môi trường DATABASE_URL", file=sys.stderr)
         return 2
     embeddings = NomicOllamaEmbeddingAdapter(settings.ollama_base_url, settings.embedding_model)
-    chunker = HybridChunker(None if args.no_semantic else embeddings)
+    chunker = HybridChunker(None if args.no_semantic else embeddings, min_chunk_tokens=args.min_chunk_tokens)
     engine = create_async_engine(url) if url else None
     report = IngestReport()
     try:
-        records = read_jsonl(args.input, report, args.limit)
-        await ingest_records(
-            records, engine, embeddings, chunker,  # type: ignore[arg-type]
-            batch_size=args.batch_size, skip_existing=args.skip_existing, dry_run=args.dry_run,
-            dim=settings.embedding_dim, report=report,
-        )
+        for path in args.input:
+            await ingest_records(
+                read_records(path, report, args.limit, args.format), engine, embeddings, chunker,  # type: ignore[arg-type]
+                batch_size=args.batch_size, skip_existing=args.skip_existing, dry_run=args.dry_run,
+                dim=settings.embedding_dim, report=report,
+            )
     finally:
         if engine:
             await engine.dispose()

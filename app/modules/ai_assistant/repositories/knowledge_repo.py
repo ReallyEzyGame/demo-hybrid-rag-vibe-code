@@ -1,6 +1,7 @@
 """Truy vấn Hybrid (pgvector HNSW + trigram) hợp nhất bằng RRF ngay trong PostgreSQL — thiết kế §5.1."""
 from __future__ import annotations
 
+import json
 from typing import Sequence
 from uuid import UUID
 
@@ -40,7 +41,7 @@ WITH vec AS (
            l.score AS lexical_score
     FROM vec_r v FULL OUTER JOIN lex_r l ON v.id = l.id
 )
-SELECT c.id AS chunk_id, d.id AS document_id, d.title, d.source_name, d.source_url, c.content,
+SELECT c.id AS chunk_id, d.id AS document_id, d.title, d.source_name, d.source_url, c.content, c.metadata AS chunk_metadata,
        f.rrf, f.vector_similarity, f.lexical_score
 FROM fused f
 JOIN knowledge_chunks c ON c.id = f.id
@@ -53,7 +54,7 @@ LIMIT :top_n
 
 _LEXICAL_ONLY_SQL = text(
     f"""
-SELECT c.id AS chunk_id, d.id AS document_id, d.title, d.source_name, d.source_url, c.content,
+SELECT c.id AS chunk_id, d.id AS document_id, d.title, d.source_name, d.source_url, c.content, c.metadata AS chunk_metadata,
        word_similarity(:q, c.content) AS lexical_score
 FROM knowledge_chunks c JOIN knowledge_documents d ON d.id = c.document_id
 WHERE :q <% c.content AND {_ACTIVE_DOC}
@@ -69,6 +70,9 @@ def to_pgvector_literal(vec: Sequence[float]) -> str:
 
 def _row_to_chunk(row, *, rrf: float | None = None) -> RetrievedChunk:  # noqa: ANN001
     m = row._mapping
+    meta = m.get("chunk_metadata") or {}
+    if isinstance(meta, str):  # asyncpg trả jsonb dạng chuỗi khi đi qua text()
+        meta = json.loads(meta)
     return RetrievedChunk(
         chunk_id=m["chunk_id"],
         document_id=m["document_id"],
@@ -79,6 +83,7 @@ def _row_to_chunk(row, *, rrf: float | None = None) -> RetrievedChunk:  # noqa: 
         rrf_score=float(rrf if rrf is not None else m.get("rrf") or 0.0),
         vector_similarity=float(m["vector_similarity"]) if m.get("vector_similarity") is not None else None,
         lexical_score=float(m["lexical_score"]) if m.get("lexical_score") is not None else None,
+        metadata=meta,
     )
 
 

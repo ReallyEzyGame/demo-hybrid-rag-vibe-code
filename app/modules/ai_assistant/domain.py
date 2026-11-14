@@ -1,6 +1,7 @@
 """Kiểu dữ liệu nội bộ chạy xuyên pipeline (không phải DTO của API)."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -15,6 +16,25 @@ def make_excerpt(text: str, limit: int = EXCERPT_MAX) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+_UNIT_SPLIT = re.compile(r"\n+|(?<=[.!?])\s+")
+_WORD = re.compile(r"\w{3,}", re.UNICODE)
+_STOP = frozenset("the and for with what that this are you your not can how does from about have has was were will".split())
+
+
+def make_query_excerpt(text: str, query: str | None, limit: int = EXCERPT_MAX) -> str:
+    """Trích đoạn BẮT ĐẦU từ câu khớp câu hỏi nhất (thay vì luôn lấy đầu chunk), để đoạn hiển thị thực sự chứa bằng chứng."""
+    units = [u.strip() for u in _UNIT_SPLIT.split(text) if u.strip()]
+    q = {w for w in _WORD.findall((query or "").lower()) if w not in _STOP}
+    if not units or not q:
+        return make_excerpt(text, limit)
+    scores = [len(q & set(_WORD.findall(u.lower()))) for u in units]
+    best = max(range(len(units)), key=lambda i: (scores[i], -i))  # hòa điểm → câu đứng trước
+    if scores[best] == 0:
+        return make_excerpt(text, limit)
+    start = best - 1 if best > 0 and units[best - 1].startswith("#") else best  # giữ tiêu đề mục ngay trước câu
+    return make_excerpt(" ".join(units[start:]), limit)
+
+
 @dataclass(frozen=True)
 class RetrievedChunk:
     chunk_id: UUID
@@ -27,6 +47,7 @@ class RetrievedChunk:
     vector_similarity: float | None = None
     lexical_score: float | None = None
     rerank_score: float | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -42,6 +63,7 @@ class EvidenceItem:
     document_id: UUID | None = None
     chunk_id: UUID | None = None
     drug_id: UUID | None = None
+    severity_hint: str | None = None  # vd. 'RED' từ dữ liệu thuốc–thực phẩm
 
 
 @dataclass
